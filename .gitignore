@@ -37,3 +37,6 @@ Thumbs.db
 
 # uv
 .uv/
+
+# Documentation
+dataset_as_queue.md
