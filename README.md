@@ -642,4 +642,4 @@ The multi-threaded worker is simpler and requires no additional dependencies, ma
 
 ## License
 
-This is a prototype implementation for demonstration purposes.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
