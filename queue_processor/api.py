@@ -2,7 +2,9 @@
 
 import csv
 import io
+import json
 import logging
+import time
 from typing import Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -55,6 +57,66 @@ async def get_stats():
     """Get queue statistics."""
     stats = queue.get_stats()
     return QueueStats(**stats)
+
+
+@app.get("/api/speed")
+async def get_processing_speed():
+    """Get current processing speed metrics."""
+    conn = queue._get_connection()
+    current_time = time.time()
+
+    # Get items completed in the last 60 seconds
+    last_minute_query = f"""
+        SELECT COUNT(*) as count, MIN(created_at) as first_time, MAX(created_at) as last_time
+        FROM {queue.queue_name}
+        WHERE status = 'completed'
+        AND json_extract(metadata, '$.completed_at') > ?
+    """
+
+    cursor = conn.execute(last_minute_query, (current_time - 60,))
+    last_minute = cursor.fetchone()
+
+    # Get items completed in the last 5 minutes for a more stable average
+    last_5min_query = f"""
+        SELECT COUNT(*) as count, MIN(created_at) as first_time, MAX(created_at) as last_time
+        FROM {queue.queue_name}
+        WHERE status = 'completed'
+        AND json_extract(metadata, '$.completed_at') > ?
+    """
+
+    cursor = conn.execute(last_5min_query, (current_time - 300,))
+    last_5min = cursor.fetchone()
+
+    # Calculate speeds
+    speed_1min = 0
+    speed_5min = 0
+    eta_seconds = None
+
+    if last_minute["count"] > 0:
+        speed_1min = last_minute["count"] * 60 / 60  # items per minute
+
+    if last_5min["count"] > 0:
+        speed_5min = last_5min["count"] * 60 / 300  # items per minute
+
+    # Get current stats for ETA
+    stats = queue.get_stats()
+    pending = stats.get("pending", 0)
+    processing = stats.get("processing", 0)
+    remaining = pending + processing
+
+    # Calculate ETA using 5-minute average (more stable)
+    if speed_5min > 0 and remaining > 0:
+        eta_seconds = (remaining / speed_5min) * 60
+
+    return {
+        "speed_1min": round(speed_1min, 2),
+        "speed_5min": round(speed_5min, 2),
+        "items_last_1min": last_minute["count"],
+        "items_last_5min": last_5min["count"],
+        "remaining_items": remaining,
+        "eta_seconds": round(eta_seconds) if eta_seconds else None,
+        "eta_minutes": round(eta_seconds / 60, 1) if eta_seconds else None,
+    }
 
 
 @app.get("/api/items")

@@ -242,6 +242,31 @@
             </div>
         </div>
 
+        <!-- Speed Stats -->
+        <div class="stats-grid" style="margin-top: 15px;">
+            <div class="stat-card" style="grid-column: span 2;">
+                <div class="stat-label">Speed (1 min)</div>
+                <div class="stat-value" id="stat-speed-1min" style="color: #9932CC;">--</div>
+                <div style="font-size: 0.9em; color: #666; margin-top: 5px;">
+                    <span id="stat-items-1min">0</span> items/min
+                </div>
+            </div>
+            <div class="stat-card" style="grid-column: span 2;">
+                <div class="stat-label">Speed (5 min avg)</div>
+                <div class="stat-value" id="stat-speed-5min" style="color: #20B2AA;">--</div>
+                <div style="font-size: 0.9em; color: #666; margin-top: 5px;">
+                    <span id="stat-items-5min">0</span> items/min
+                </div>
+            </div>
+            <div class="stat-card" style="grid-column: span 1;">
+                <div class="stat-label">ETA</div>
+                <div class="stat-value" id="stat-eta" style="font-size: 1.5em; color: #FF6347;">--</div>
+                <div style="font-size: 0.9em; color: #666; margin-top: 5px;">
+                    <span id="stat-remaining">0</span> items left
+                </div>
+            </div>
+        </div>
+
         <!-- Add Item -->
         <div class="section">
             <h2>Add Item to Queue</h2>
@@ -302,6 +327,41 @@
                 document.getElementById('stat-failed').textContent = stats.failed;
             } catch (error) {
                 console.error('Error loading stats:', error);
+            }
+        }
+
+        // Load speed metrics
+        async function loadSpeed() {
+            try {
+                const response = await fetch(`${API_BASE}/speed`);
+                const speed = await response.json();
+
+                // Update speed displays
+                document.getElementById('stat-speed-1min').textContent =
+                    speed.speed_1min > 0 ? speed.speed_1min.toFixed(1) : '--';
+                document.getElementById('stat-speed-5min').textContent =
+                    speed.speed_5min > 0 ? speed.speed_5min.toFixed(1) : '--';
+
+                document.getElementById('stat-items-1min').textContent = speed.items_last_1min;
+                document.getElementById('stat-items-5min').textContent = speed.items_last_5min;
+                document.getElementById('stat-remaining').textContent = speed.remaining_items;
+
+                // Update ETA
+                if (speed.eta_minutes !== null && speed.eta_minutes > 0) {
+                    if (speed.eta_minutes < 1) {
+                        document.getElementById('stat-eta').textContent = '< 1m';
+                    } else if (speed.eta_minutes < 60) {
+                        document.getElementById('stat-eta').textContent = Math.round(speed.eta_minutes) + 'm';
+                    } else {
+                        const hours = Math.floor(speed.eta_minutes / 60);
+                        const mins = Math.round(speed.eta_minutes % 60);
+                        document.getElementById('stat-eta').textContent = `${hours}h ${mins}m`;
+                    }
+                } else {
+                    document.getElementById('stat-eta').textContent = '--';
+                }
+            } catch (error) {
+                console.error('Error loading speed:', error);
             }
         }
 
@@ -451,11 +511,13 @@
 
         // Initial load
         loadStats();
+        loadSpeed();
         loadItems();
 
         // Auto-refresh every 10 seconds
         setInterval(() => {
             loadStats();
+            loadSpeed();
             loadItems(currentFilter);
         }, 10000);
     </script>
