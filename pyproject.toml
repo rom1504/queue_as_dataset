@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "apache-beam>=2.69.0",
     "beautifulsoup4>=4.14.2",
     "fastapi>=0.121.2",
     "httpx>=0.28.1",
