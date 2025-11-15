@@ -8,10 +8,11 @@ This system implements a multi-stage queue-based architecture for:
 - Downloading web pages
 - Extracting interleaved text and image content
 - Computing statistics on processed content
-- Storing results as JSON files
+- Training ML models to predict content complexity
+- Running inference on new content
 - Managing the processing pipeline via a web interface
 
-The system supports multiple queues for different processing stages, allowing for sophisticated data processing pipelines.
+The system supports multiple queues for different processing stages, allowing for sophisticated data processing pipelines with machine learning integration.
 
 ## Architecture
 
@@ -20,9 +21,10 @@ The system consists of several components:
 1. **SQLite Queue Backend** - Durable multi-queue system with visibility timeout and retry logic
 2. **Page Worker** - Processes web pages into interleaved content (stage 1)
 3. **Stats Worker** - Computes statistics on processed pages (stage 2)
-4. **FastAPI Backend** - REST API for multi-queue management
-5. **Frontend UI** - Web interface for monitoring and adding items
-6. **Puller** - Example consumer that reads processed results
+4. **ML Worker** - Trains models and runs inference to predict content complexity (stage 3)
+5. **FastAPI Backend** - REST API for multi-queue management
+6. **Frontend UI** - Web interface for monitoring and adding items with queue-specific views
+7. **Puller** - Example consumer that reads processed results
 
 ### Multi-Stage Pipeline
 
@@ -30,8 +32,9 @@ The system supports multiple independent queues for different processing stages:
 
 - **page_queue** (Stage 1): Web pages → Interleaved content (text + images)
 - **stats_queue** (Stage 2): Processed pages → Statistics (word counts, image metrics)
+- **ml_queue** (Stage 3): Processed pages → ML predictions (chunk count classification)
 
-Each queue maintains independent status tracking, allowing for complex data processing workflows.
+Each queue maintains independent status tracking, allowing for complex data processing workflows with machine learning integration.
 
 ## Installation
 
@@ -88,15 +91,63 @@ The stats worker computes statistics from completed page processing results:
 - Chunk distribution (text vs image)
 - Min/max values
 
-### 4. Access the Web UI
+### 4. (Optional) ML Worker - Train and Predict
+
+The ML worker trains transformer models to predict content complexity (chunk count) from processed page JSON.
+
+#### Training Mode
+
+Train a model on completed items (requires wandb login):
+
+```bash
+# Login to Weights & Biases for experiment tracking
+wandb login
+
+# Train on 1000 items with 40 training steps
+uv run python -m queue_processor.ml_worker \
+  --once \
+  --min-examples 50 \
+  --batch-size 1 \
+  --max-steps 40 \
+  --model-dir models/chunk_predictor
+```
+
+Training features:
+- Uses DistilBERT for sequence classification
+- 5-bin classification: 0-20, 21-50, 51-100, 101-200, 200+ chunks
+- Weights & Biases integration for experiment tracking
+- Saves model to disk for later inference
+
+#### Inference Mode
+
+Run predictions on new items using the trained model:
+
+```bash
+# Process 100 items from page_queue and save predictions to ml_queue
+uv run python -m queue_processor.ml_worker \
+  --inference \
+  --batch-size 100 \
+  --model-dir models/chunk_predictor
+```
+
+Predictions include:
+- Predicted chunk range (e.g., "51-100")
+- Confidence score (0-1)
+- Class probabilities for all 5 bins
+- Actual chunk count for comparison
+
+### 5. Access the Web UI
 
 Open your browser to:
 - Frontend UI: `http://localhost:8000/ui`
 - API docs: `http://localhost:8000/docs`
 
-The UI now supports multiple queues - use the dropdown to switch between page_queue and stats_queue.
+The UI supports all three queues - use the dropdown to switch between:
+- **Page Queue (Stage 1)**: View processing status and chunk counts
+- **Stats Queue (Stage 2)**: View detailed statistics (text/images, words, averages)
+- **ML Queue (Stage 3)**: View predictions with confidence scores and accuracy indicators
 
-### 5. Add Items to the Queue
+### 6. Add Items to the Queue
 
 #### Via Web UI
 1. Go to `http://localhost:8000/ui`
@@ -116,7 +167,7 @@ curl -X POST http://localhost:8000/api/upload \
   -F "file=@example_urls.csv"
 ```
 
-### 6. Use the Puller to View Results
+### 7. Use the Puller to View Results
 
 ```bash
 # View summary of all completed items
@@ -126,7 +177,7 @@ uv run python -m queue_processor.puller
 uv run python -m queue_processor.puller --item-id 1
 ```
 
-### 7. (Optional) Use Apache Beam for Parallel Processing
+### 8. (Optional) Use Apache Beam for Parallel Processing
 
 For faster batch processing, use the Beam worker with multiple parallel workers and streaming pull:
 
@@ -176,34 +227,40 @@ See [Beam Performance Report](beam_performance_report.md) for detailed benchmark
 | processed_*.   |
 +-------+--------+
         |
-        v
-+-------+--------+         Stage 2: Stats Computation
-| stats_queue    |
-| (SQLite)       |
-+-------+--------+
-        |
-        v
-+-------+--------+
-| Stats Worker   |
-| - Compute      |
-| - Aggregate    |
-| - Save         |
-+-------+--------+
-        |
-        v
-+-------+--------+
-| Stats Files    |
-| stats_*.json   |
-+-------+--------+
-        |
-        v
-+-------+--------+
-| Puller         |
-| (Consumer)     |
-+----------------+
+        +--------------+
+        |              |
+        v              v
++-------+--------+   +-------+--------+   Stage 2 & 3
+| stats_queue    |   | ml_queue       |
+| (SQLite)       |   | (SQLite)       |
++-------+--------+   +-------+--------+
+        |                    |
+        v                    v
++-------+--------+   +-------+--------+
+| Stats Worker   |   | ML Worker      |
+| - Compute      |   | - Train        |
+| - Aggregate    |   | - Predict      |
+| - Save         |   | - Evaluate     |
++-------+--------+   +-------+--------+
+        |                    |
+        v                    v
++-------+--------+   +-------+--------+
+| Stats Files    |   | Predictions    |
+| stats_*.json   |   | (in ml_queue)  |
++-------+--------+   +-------+--------+
+        |                    |
+        +----------+---------+
+                   |
+                   v
+           +-------+--------+
+           | Web UI         |
+           | - View Stats   |
+           | - View ML      |
+           | - Compare      |
+           +----------------+
 ```
 
-Each stage operates independently with its own queue, allowing for flexible scaling and fault isolation.
+Each stage operates independently with its own queue, allowing for flexible scaling and fault isolation. Stages 2 and 3 (stats and ML) can run in parallel.
 
 ## Data Format
 
@@ -273,6 +330,7 @@ All endpoints now support multiple queues via the `?queue=` parameter (defaults 
 Available queues:
 - `page_queue` - Web page processing queue (stage 1)
 - `stats_queue` - Statistics computation queue (stage 2)
+- `ml_queue` - Machine learning predictions queue (stage 3)
 
 ## Configuration
 
@@ -343,6 +401,38 @@ Options:
 - `--batch-size` - Items to process per batch (default: 100)
 - `--once` - Process once and exit instead of running continuously
 
+### ML Worker Options
+
+```bash
+# Training mode
+uv run python -m queue_processor.ml_worker \
+  --source-queue page_queue \
+  --target-queue ml_queue \
+  --db queue.db \
+  --input-dir data \
+  --model-dir models/chunk_predictor \
+  --min-examples 50 \
+  --batch-size 1 \
+  --max-steps 40 \
+  --once
+
+# Inference mode
+uv run python -m queue_processor.ml_worker \
+  --inference \
+  --batch-size 100 \
+  --model-dir models/chunk_predictor
+```
+
+Options:
+- `--inference` - Run in inference mode instead of training
+- `--source-queue` - Queue to read completed items from (default: page_queue)
+- `--target-queue` - Queue to push predictions to (default: ml_queue)
+- `--min-examples` - Minimum training examples required (default: 50)
+- `--batch-size` - Batch size for training (default: 4) or inference (default: 100)
+- `--max-steps` - Maximum training steps (default: 100)
+- `--model-dir` - Directory to save/load model (default: models/chunk_predictor)
+- `--once` - Train once and exit instead of running continuously
+
 ## Testing
 
 Run the test suite:
@@ -369,10 +459,11 @@ Tests cover:
 │   ├── worker.py       # Web page processor (stage 1)
 │   ├── beam_worker.py  # Apache Beam parallel processor with streaming pull
 │   ├── stats_worker.py # Statistics computation worker (stage 2)
+│   ├── ml_worker.py    # ML training and inference worker (stage 3)
 │   ├── api.py          # FastAPI backend with multi-queue support
 │   └── puller.py       # Example consumer
 ├── frontend/
-│   └── index.html      # Web UI with queue selector
+│   └── index.html      # Web UI with queue-specific views
 ├── tests/
 │   ├── test_queue.py   # Queue tests
 │   └── test_worker.py  # Worker tests
@@ -380,6 +471,8 @@ Tests cover:
 │   ├── processed_*.json  # Processed page files (stage 1)
 │   └── stats/
 │       └── stats_*.json  # Statistics files (stage 2)
+├── models/
+│   └── chunk_predictor/  # Trained ML model files
 ├── queue.db            # SQLite database with multiple queues
 └── example_urls.csv    # Example CSV file
 ```
@@ -395,7 +488,10 @@ Tests cover:
 - **Parallel Processing**: Optional Apache Beam integration for 3.5x speedup with 4 workers
 - **Streaming Pull**: On-demand batch pulling for resilient processing (only ~10-30 items at risk)
 - **Statistics Computation**: Automated metrics extraction (word counts, image metrics)
-- **Web Interface**: Easy monitoring and management with queue selector
+- **Machine Learning**: Train transformer models to predict content complexity
+- **ML Inference**: Run predictions on new content with confidence scores
+- **Experiment Tracking**: Weights & Biases integration for ML training
+- **Web Interface**: Easy monitoring and management with queue-specific views
 - **CSV Upload**: Bulk add URLs from CSV files
 - **Interleaved Content**: Preserves document structure with text and images in order
 - **Smart Filtering**: Removes navigation, scripts, tracking pixels, and small images

@@ -224,6 +224,7 @@
             <select id="queue-select" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; font-size: 14px;">
                 <option value="page_queue">Page Queue (Stage 1)</option>
                 <option value="stats_queue">Stats Queue (Stage 2)</option>
+                <option value="ml_queue">ML Queue (Stage 3)</option>
             </select>
         </div>
 
@@ -404,6 +405,7 @@
         // Render items table
         function renderItems(items) {
             const container = document.getElementById('items-container');
+            const queue = getSelectedQueue();
 
             if (items.length === 0) {
                 container.innerHTML = '<div class="loading">No items found</div>';
@@ -416,18 +418,80 @@
             html += '<th>URL</th>';
             html += '<th>Status</th>';
             html += '<th>Attempts</th>';
-            html += '<th>Chunks</th>';
+
+            // Add queue-specific columns
+            if (queue === 'ml_queue') {
+                html += '<th>Predicted</th>';
+                html += '<th>Confidence</th>';
+                html += '<th>Actual</th>';
+                html += '<th>Match</th>';
+            } else if (queue === 'stats_queue') {
+                html += '<th>Total Chunks</th>';
+                html += '<th>Text/Images</th>';
+                html += '<th>Total Words</th>';
+                html += '<th>Avg Words/Chunk</th>';
+            } else {
+                html += '<th>Chunks</th>';
+            }
+
             html += '</tr></thead>';
             html += '<tbody>';
 
             items.forEach(item => {
-                const numChunks = item.metadata.num_chunks || '-';
                 html += '<tr>';
                 html += `<td>${item.id}</td>`;
                 html += `<td class="url-cell" title="${item.payload.page_url}">${item.payload.page_url}</td>`;
                 html += `<td><span class="status-badge status-${item.status}">${item.status}</span></td>`;
                 html += `<td>${item.attempts}</td>`;
-                html += `<td>${numChunks}</td>`;
+
+                if (queue === 'ml_queue') {
+                    // ML Queue specific columns
+                    const prediction = item.payload.prediction || {};
+                    const predicted = prediction.predicted_range || '-';
+                    const confidence = prediction.confidence ? (prediction.confidence * 100).toFixed(1) + '%' : '-';
+                    const actual = item.payload.actual_chunks || '-';
+
+                    // Check if prediction was correct
+                    let match = '-';
+                    if (prediction.predicted_range && item.payload.actual_chunks) {
+                        const actualChunks = item.payload.actual_chunks;
+                        const range = prediction.predicted_range;
+                        let correct = false;
+
+                        if (range === '0-20' && actualChunks <= 20) correct = true;
+                        else if (range === '21-50' && actualChunks >= 21 && actualChunks <= 50) correct = true;
+                        else if (range === '51-100' && actualChunks >= 51 && actualChunks <= 100) correct = true;
+                        else if (range === '101-200' && actualChunks >= 101 && actualChunks <= 200) correct = true;
+                        else if (range === '200+' && actualChunks > 200) correct = true;
+
+                        match = correct ? '✓' : '✗';
+                    }
+
+                    html += `<td>${predicted}</td>`;
+                    html += `<td>${confidence}</td>`;
+                    html += `<td>${actual}</td>`;
+                    html += `<td style="font-size: 1.2em; color: ${match === '✓' ? '#32CD32' : '#DC143C'}">${match}</td>`;
+                } else if (queue === 'stats_queue') {
+                    // Stats Queue specific columns
+                    const stats = item.metadata.stats || {};
+                    const totalChunks = stats.total_chunks || '-';
+                    const textChunks = stats.text_chunks || 0;
+                    const imageChunks = stats.image_chunks || 0;
+                    const totalWords = stats.total_words || '-';
+                    const avgWords = stats.avg_words_per_text_chunk
+                        ? stats.avg_words_per_text_chunk.toFixed(1)
+                        : '-';
+
+                    html += `<td>${totalChunks}</td>`;
+                    html += `<td>${textChunks} / ${imageChunks}</td>`;
+                    html += `<td>${totalWords}</td>`;
+                    html += `<td>${avgWords}</td>`;
+                } else {
+                    // Other queues - show num_chunks
+                    const numChunks = item.metadata.num_chunks || '-';
+                    html += `<td>${numChunks}</td>`;
+                }
+
                 html += '</tr>';
             });
 

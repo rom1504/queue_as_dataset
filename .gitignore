@@ -19,6 +19,11 @@ queue.db
 queue.db-journal
 data/
 
+# ML models and training artifacts
+models/
+wandb/
+*.log
+
 # IDE
 .vscode/
 .idea/

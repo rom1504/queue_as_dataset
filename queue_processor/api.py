@@ -35,7 +35,7 @@ app.add_middleware(
 
 # Initialize queues
 DB_PATH = "queue.db"
-QUEUE_NAMES = ["page_queue", "stats_queue"]
+QUEUE_NAMES = ["page_queue", "stats_queue", "ml_queue"]
 
 # Cache queue instances
 _queues = {}
