@@ -188,18 +188,25 @@ class SQLiteQueue:
         finally:
             conn.close()
 
-    def ack(self, item_id: int):
+    def ack(self, item_id: int, metadata: dict[str, Any] = None):
         """Acknowledge successful processing of an item.
 
         Args:
             item_id: ID of the item to acknowledge
+            metadata: Optional updated metadata to save
         """
         conn = self._get_connection()
         try:
-            conn.execute(
-                f"UPDATE {self.queue_name} SET status = 'completed' WHERE id = ?",
-                (item_id,),
-            )
+            if metadata:
+                conn.execute(
+                    f"UPDATE {self.queue_name} SET status = 'completed', metadata = ? WHERE id = ?",
+                    (json.dumps(metadata), item_id),
+                )
+            else:
+                conn.execute(
+                    f"UPDATE {self.queue_name} SET status = 'completed' WHERE id = ?",
+                    (item_id,),
+                )
             conn.commit()
         finally:
             conn.close()

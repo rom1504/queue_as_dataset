@@ -80,58 +80,112 @@ class WebPageProcessor:
         if not main_content:
             return chunks
 
-        # Walk through elements and extract text and images in order
-        for element in main_content.descendants:
-            # Handle text nodes
-            if isinstance(element, NavigableString):
-                text = str(element).strip()
-                # Skip empty text and very short text
-                if text and len(text) > 10:
-                    # Check if we should add a new text chunk or append to existing
-                    if chunks and chunks[-1].type == "text":
-                        # Append to last text chunk
-                        chunks[-1].value += " " + text
-                    else:
-                        chunks.append(InterleavedChunk(type="text", value=text))
+        # Extract content by walking through elements in order
+        self._extract_from_element(main_content, base_url, chunks)
 
-            # Handle image elements
-            elif isinstance(element, Tag) and element.name == "img":
-                src = element.get("src")
-                if src:
-                    # Resolve relative URLs
-                    absolute_url = urljoin(base_url, src)
-
-                    # Filter out likely tracking pixels, icons, etc.
-                    if self._is_valid_image(element, src):
-                        chunks.append(
-                            InterleavedChunk(type="image", value=absolute_url)
-                        )
-
-            # Handle paragraph and heading elements for better text extraction
-            elif isinstance(element, Tag) and element.name in ["p", "h1", "h2", "h3", "h4", "h5", "h6"]:
-                text = element.get_text(" ", strip=True)
-                if text and len(text) > 10:
-                    # Add as new chunk to maintain structure
-                    chunks.append(InterleavedChunk(type="text", value=text))
-
-        # Post-process: merge consecutive text chunks
-        merged_chunks = []
-        for chunk in chunks:
-            if chunk.type == "text":
-                if merged_chunks and merged_chunks[-1].type == "text":
-                    merged_chunks[-1].value += "\n\n" + chunk.value
-                else:
-                    merged_chunks.append(chunk)
-            else:
-                merged_chunks.append(chunk)
-
-        # Filter out very short text chunks
+        # Filter out very short text chunks but keep all images
         final_chunks = [
-            chunk for chunk in merged_chunks
-            if chunk.type == "image" or (chunk.type == "text" and len(chunk.value) > 50)
+            chunk for chunk in chunks
+            if chunk.type == "image" or (chunk.type == "text" and len(chunk.value) > 100)
         ]
 
         return final_chunks
+
+    def _extract_from_element(
+        self, element: Tag, base_url: str, chunks: list[InterleavedChunk]
+    ):
+        """Recursively extract content from an element.
+
+        Args:
+            element: BeautifulSoup element
+            base_url: Base URL for resolving relative URLs
+            chunks: List to append chunks to
+        """
+        for child in element.children:
+            if isinstance(child, NavigableString):
+                # Skip pure whitespace
+                continue
+
+            if not isinstance(child, Tag):
+                continue
+
+            # Handle images - add immediately and don't recurse
+            if child.name == "img":
+                src = child.get("src")
+                if src:
+                    absolute_url = urljoin(base_url, src)
+                    if self._is_valid_image(child, src):
+                        chunks.append(
+                            InterleavedChunk(type="image", value=absolute_url)
+                        )
+                continue
+
+            # Handle text block elements
+            if child.name in ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote"]:
+                # Extract images from within this block first
+                imgs = child.find_all("img")
+
+                if imgs:
+                    # If block contains images, process it more carefully
+                    # Get text before first image
+                    text_parts = []
+                    for part in child.children:
+                        if isinstance(part, Tag) and part.name == "img":
+                            # Flush accumulated text
+                            if text_parts:
+                                text = " ".join(text_parts).strip()
+                                if len(text) > 50:
+                                    chunks.append(InterleavedChunk(type="text", value=text))
+                                text_parts = []
+
+                            # Add image
+                            src = part.get("src")
+                            if src:
+                                absolute_url = urljoin(base_url, src)
+                                if self._is_valid_image(part, src):
+                                    chunks.append(
+                                        InterleavedChunk(type="image", value=absolute_url)
+                                    )
+                        else:
+                            # Accumulate text
+                            if isinstance(part, NavigableString):
+                                text_parts.append(str(part))
+                            elif isinstance(part, Tag):
+                                text_parts.append(part.get_text(" "))
+
+                    # Flush any remaining text
+                    if text_parts:
+                        text = " ".join(text_parts).strip()
+                        if len(text) > 50:
+                            chunks.append(InterleavedChunk(type="text", value=text))
+                else:
+                    # No images in this block, just get the text
+                    text = child.get_text(" ", strip=True)
+                    if len(text) > 50:
+                        chunks.append(InterleavedChunk(type="text", value=text))
+
+            # Handle figure elements (often contain images)
+            elif child.name == "figure":
+                # Extract image from figure
+                img = child.find("img")
+                if img:
+                    src = img.get("src")
+                    if src:
+                        absolute_url = urljoin(base_url, src)
+                        if self._is_valid_image(img, src):
+                            chunks.append(
+                                InterleavedChunk(type="image", value=absolute_url)
+                            )
+                # Also extract caption if present
+                caption = child.find("figcaption")
+                if caption:
+                    text = caption.get_text(" ", strip=True)
+                    if len(text) > 50:
+                        chunks.append(InterleavedChunk(type="text", value=text))
+
+            # Handle containers - recurse into them
+            elif child.name in ["div", "section", "article", "main", "aside", "table", "tbody", "tr", "td"]:
+                self._extract_from_element(child, base_url, chunks)
 
     def _is_valid_image(self, img_element: Tag, src: str) -> bool:
         """Check if an image is worth including.
@@ -143,7 +197,7 @@ class WebPageProcessor:
         Returns:
             True if image should be included
         """
-        # Skip tracking pixels
+        # Skip tracking pixels and very small images
         width = img_element.get("width")
         height = img_element.get("height")
 
@@ -151,16 +205,20 @@ class WebPageProcessor:
             try:
                 w = int(width)
                 h = int(height)
-                if w < 50 or h < 50:
+                # Skip really small images (likely icons/buttons)
+                if w < 40 or h < 40:
+                    return False
+                # Skip images that are clearly tiny
+                if w * h < 2000:  # e.g., 40x50 or smaller
                     return False
             except ValueError:
                 pass
 
-        # Skip common icon/logo patterns
+        # Skip common icon/logo patterns (but be less aggressive)
         src_lower = src.lower()
         skip_patterns = [
-            "icon", "logo", "avatar", "emoji", "pixel",
-            "tracking", "analytics", "ad", "banner"
+            "icon-", "logo-", "avatar", "emoji",
+            "tracking", "analytics", "ad-banner"
         ]
 
         if any(pattern in src_lower for pattern in skip_patterns):
@@ -168,6 +226,10 @@ class WebPageProcessor:
 
         # Skip data URLs (usually small icons)
         if src.startswith("data:"):
+            return False
+
+        # Skip SVG icons (usually interface elements)
+        if src.endswith('.svg') and any(s in src_lower for s in ['icon', 'symbol', 'button']):
             return False
 
         return True
@@ -289,8 +351,8 @@ class QueueWorker:
             item.metadata["num_chunks"] = len(processed.chunks)
             item.metadata["completed_at"] = time.time()
 
-            # Acknowledge success
-            self.queue.ack(item.id)
+            # Acknowledge success with updated metadata
+            self.queue.ack(item.id, metadata=item.metadata)
             logger.info(
                 f"Successfully processed item {item.id}: {url} "
                 f"({len(processed.chunks)} chunks)"
