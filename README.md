@@ -14,6 +14,8 @@ This system implements a multi-stage queue-based architecture for:
 
 The system supports multiple queues for different processing stages, allowing for sophisticated data processing pipelines with machine learning integration.
 
+**[Read the blog post](https://rom1504.github.io/post.html?id=queue-as-dataset)** to learn more about the queue-as-dataset pattern and why it's useful for building robust data processing systems.
+
 ## Architecture
 
 The system consists of several components:
